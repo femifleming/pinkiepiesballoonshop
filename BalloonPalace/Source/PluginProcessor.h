@@ -313,6 +313,7 @@ private:
     std::array<fp::MasterEq, kPairs> masterEq;
     std::array<std::unique_ptr<fp::SnowFreeze>, kPairs> snowFreeze;
     std::array<std::unique_ptr<fp::HeatWave>, kPairs> heatWave;
+    int64_t wxClock = 0;   // samples run so far: the heat and snow frames keep their turns by it
     fp::AutoWeather autoSky;
     fp::Fog fog;
     fp::Wind wind;

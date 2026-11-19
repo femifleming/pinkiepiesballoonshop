@@ -42,13 +42,17 @@ public:
         }
         follow = (float) (1.0 - std::exp (-(double) hop / (driftSec * sr)));
         setFadeTimes (5.0f, 5.0f);
-        idx = 0; hopCount = 0; ramp = 0.0; amount = 0.0f; fresh = true;
+        idx = 0; pos = 0; ramp = 0.0; amount = 0.0f; ch[0].fresh = ch[1].fresh = true;
         lfoA = 0.0; lfoB = 0.37; ctl = 0;
+        updatePhases();
         updateFilter();
     }
 
-    void process (float* L, float* R, int n, bool on) noexcept
+    // clock: the host's running sample count at the start of this block, shared by every copy, so
+    // the staggered frames (see setStagger) stay apart however late each copy was prepared
+    void process (float* L, float* R, int n, bool on, int64_t clock = -1) noexcept
     {
+        if (clock >= 0) pos = clock;
         if (! on && ramp <= 0.0)
         {
             // resting: keep the input ring filled so the first frame has something to hear
@@ -59,7 +63,8 @@ public:
                 idx = (idx + 1) & (N - 1);
                 ch[0].lp1 = ch[0].lp2 = ch[1].lp1 = ch[1].lp2 = 0.0f;
             }
-            fresh = true;
+            pos += n;
+            ch[0].fresh = ch[1].fresh = true;
             amount = 0.0f;
             return;
         }
@@ -88,7 +93,9 @@ public:
                 io[c][i] = y + lpMix * (v2 - y);
             }
             idx = (idx + 1) & (N - 1);
-            if (++hopCount >= hop) { hopCount = 0; processFrame(); }
+            const int ph = (int) (++pos & (hop - 1));
+            if (ph == phase[0]) processFrame (ch[0]);
+            if (ph == phase[1]) processFrame (ch[1]);
         }
     }
 
@@ -103,8 +110,20 @@ public:
     }
     static constexpr double minFadeSec = 5.0, maxFadeSec = 300.0, driftSec = 8.0;
 
+    // Each channel's frame (a 16384-point FFT and back) is heavy, so no two should land in the same
+    // audio block: this copy is lane `lane` of 2^bits, its two channels are lanes 2*lane and 2*lane+1
+    // of 2^(bits+1), and each lane takes its own place in the hop (bit-reversed, so however many are
+    // running they spread evenly). Without it, a heatwave fading out under the snow ran all its frames
+    // on the same sample as the snow's, and the block overran.
+    void setStagger (int lane, int bits) noexcept { staggerLane = lane; staggerBits = bits; updatePhases(); }
+
 private:
-    struct Channel { std::vector<float> in, out, env; float lp1 = 0, lp2 = 0; double energy = 0.0; };
+    struct Channel { std::vector<float> in, out, env; float lp1 = 0, lp2 = 0; double energy = 0.0; bool fresh = true; };
+
+    void updatePhases() noexcept
+    {
+        for (int c = 0; c < 2; ++c) phase[c] = staggerPhase (2 * staggerLane + c, staggerBits + 1, hop);
+    }
 
     void updateFilter() noexcept
     {
@@ -120,14 +139,14 @@ private:
         a3 = (float) g * a2;
     }
 
-    void processFrame() noexcept
+    void processFrame (Channel& c) noexcept
     {
+        const bool fresh = c.fresh;
         // Loudness: each grain is scaled to carry the energy the plain (untouched) grain would have,
         // followed as slowly as the spectrum. Then, because grains with random phases add by power
         // rather than amplitude, the lot is lifted (2.03 in theory at 8x Hann overlap; 2.7 measured best:
         // a held tone comes out near 85 % and noise near 100 % before the lowpass, where 2.03 left them
         // at 65 % and 75 %). Matching per grain keeps tones and noise close; a fixed gain was 30 % apart.
-        for (auto& c : ch)
         {
             double ecoh = 0.0;
             for (int i = 0; i < N; ++i)
@@ -157,17 +176,18 @@ private:
             const float ola = g / 3.0f;   // Hann squared at 8x overlap sums to 3
             for (int i = 0; i < N; ++i) c.out[(size_t) ((idx + i) & (N - 1))] += frame[(size_t) i] * window[(size_t) i] * ola;
         }
-        fresh = false;
+        c.fresh = false;
     }
 
     double sr = 48000.0;
-    int order = 14, N = 16384, hop = 2048, bins = 8193, idx = 0, hopCount = 0, ctl = 0;
+    int order = 14, N = 16384, hop = 2048, bins = 8193, idx = 0, ctl = 0;
+    int64_t pos = 0;
+    int phase[2] { 0, 1024 }, staggerLane = 0, staggerBits = 0;
     std::unique_ptr<juce::dsp::FFT> fft;
     std::vector<float> window, frame;
     Channel ch[2];
     float follow = 0.03f, amount = 0.0f, cutoff = 9200.0f, a1 = 0, a2 = 0, a3 = 0;
     double ramp = 0.0, upStep = 0.0, downStep = 0.0, lfoA = 0.0, lfoB = 0.0;
-    bool fresh = true;
     Rng rng;
 };
 } // namespace fp

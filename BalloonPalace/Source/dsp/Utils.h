@@ -103,6 +103,16 @@ inline float flushDenormal (float x) noexcept
 
 //==============================================================================
 // small, fast, real-time safe random generator (xorshift64*)
+// Where lane j of 2^bits takes its turn in a hop: the lanes bit-reversed, so the first few in use
+// already sit far apart (lanes 0..3 of 64 land at 0, 1/2, 1/4, 3/4 of the hop). For heavy STFT frames
+// that should never pile up in one audio block.
+inline int staggerPhase (int j, int bits, int hop) noexcept
+{
+    int r = 0;
+    for (int b = 0; b < bits; ++b) if (j & (1 << b)) r |= 1 << (bits - 1 - b);
+    return (int) (((int64_t) r * hop) >> bits);
+}
+
 struct Rng
 {
     uint64_t s = 0x9E3779B97F4A7C15ull;

@@ -302,3 +302,11 @@ Every request typed while this was being designed and built with Claude Code, in
 
 
 1. "for every single app and vst on my github, just make the app logo icon extremely minimal, a letter from this font [Septambres Neau] in some color, on some color background, update all the app icons." (New app icons: one Septambres Neau glyph, one colour on one colour.)
+
+### 2026-11-19
+
+> in pinkie pies baloon shop and balloon palace, when its trasnferring from heatwave to snow it laggs and glitvhes the audio, can you check and fix this.
+
+> fix all balloon palace apps, balloon shop apps are fine
+
+(Balloon Palace: every channel pair's heatwave and snow frames now take their own turn in the hop instead of all landing in one audio block.)

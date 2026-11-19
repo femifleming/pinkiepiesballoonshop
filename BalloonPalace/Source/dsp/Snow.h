@@ -48,11 +48,14 @@ public:
         }
         setFadeTimes (5.0f, 5.0f);
         xfStep = (float) (1.0 / (0.04 * sr));
-        idx = 0; hopCount = 0; ramp = 0.0; amount = 0.0f; xf = 0.0f; framesHeard = 0; fresh = true;
+        idx = 0; pos = 0; ramp = 0.0; amount = 0.0f; xf = 0.0f; framesHeard = 0; ch[0].fresh = ch[1].fresh = true;
+        updatePhases();
     }
 
-    void process (float* L, float* R, int n, bool on) noexcept
+    // clock: the host's running sample count at the start of this block (see the heatwave's)
+    void process (float* L, float* R, int n, bool on, int64_t clock = -1) noexcept
     {
+        if (clock >= 0) pos = clock;
         if (! on && amount <= 0.0f && xf <= 0.0f)
         {
             // resting: keep the input ring filled so the first frame has something to hear
@@ -62,7 +65,8 @@ public:
                 ch[0].out[(size_t) idx] = 0.0f; ch[1].out[(size_t) idx] = 0.0f;
                 idx = (idx + 1) & (N - 1);
             }
-            fresh = true;
+            pos += n;
+            ch[0].fresh = ch[1].fresh = true;
             framesHeard = 0;
             return;
         }
@@ -71,8 +75,8 @@ public:
             // counted in double: a 5 min fade moves 1/14,400,000 a sample, below a float's step near 1
             ramp = on ? std::min (1.0, ramp + upStep) : std::max (0.0, ramp - downStep);
             amount = (float) ramp;
-            // hand over to the resynthesis once it has a full window (8 frames), hand back once thawed
-            if ((on || amount > 0.0f) && framesHeard >= 8) xf = std::min (1.0f, xf + xfStep);
+            // hand over to the resynthesis once it has a full window (8 frames a channel), hand back once thawed
+            if ((on || amount > 0.0f) && framesHeard >= 16) xf = std::min (1.0f, xf + xfStep);
             else if (! on && amount <= 0.0f) xf = std::max (0.0f, xf - xfStep);
             const float wet = std::sin (xf * (float) kPi * 0.5f), dry = std::cos (xf * (float) kPi * 0.5f);
             const float wl = ch[0].out[(size_t) idx], wr = ch[1].out[(size_t) idx];
@@ -81,7 +85,9 @@ public:
             idx = (idx + 1) & (N - 1);
             L[i] = dry * L[i] + wet * wl;
             R[i] = dry * R[i] + wet * wr;
-            if (++hopCount >= hop) { hopCount = 0; processFrame(); ++framesHeard; }
+            const int ph = (int) (++pos & (hop - 1));
+            if (ph == phase[0]) { processFrame (ch[0]); ++framesHeard; }
+            if (ph == phase[1]) { processFrame (ch[1]); ++framesHeard; }
         }
     }
 
@@ -96,15 +102,24 @@ public:
     }
     static constexpr double minFadeSec = 5.0, maxFadeSec = 300.0;
 
+    // where this copy's frames fall in the hop, so it never runs them in the same block as the
+    // heatwave's or another copy's (see HeatWave::setStagger)
+    void setStagger (int lane, int bits) noexcept { staggerLane = lane; staggerBits = bits; updatePhases(); }
+
 private:
-    struct Channel { std::vector<float> in, out, env, adv, prevPhase, outPhase, refPhase; std::vector<int> peakOf; std::vector<char> tonal; };
+    struct Channel { std::vector<float> in, out, env, adv, prevPhase, outPhase, refPhase; std::vector<int> peakOf; std::vector<char> tonal; bool fresh = true; };
+
+    void updatePhases() noexcept
+    {
+        for (int c = 0; c < 2; ++c) phase[c] = staggerPhase (2 * staggerLane + c, staggerBits + 1, hop);
+    }
 
     static float wrap (float p) noexcept { return p - (float) kTwoPi * std::floor ((p + (float) kPi) / (float) kTwoPi); }
 
-    void processFrame() noexcept
+    void processFrame (Channel& c) noexcept
     {
+        const bool fresh = c.fresh;
         const float follow = fresh ? 1.0f : (1.0f - amount) * (1.0f - amount);   // how much of the live spectrum gets through
-        for (auto& c : ch)
         {
             for (int i = 0; i < N; ++i) frame[(size_t) i] = c.in[(size_t) ((idx + i) & (N - 1))] * window[(size_t) i];
             fft->performRealOnlyForwardTransform (frame.data(), true);
@@ -194,18 +209,19 @@ private:
             const float ola = 1.0f / 3.0f;   // Hann squared at 8x overlap sums to 3
             for (int i = 0; i < N; ++i) c.out[(size_t) ((idx + i) & (N - 1))] += frame[(size_t) i] * window[(size_t) i] * ola;
         }
-        fresh = false;
+        c.fresh = false;
     }
 
     double sr = 48000.0;
-    int order = 14, N = 16384, hop = 2048, bins = 8193, idx = 0, hopCount = 0;
+    int order = 14, N = 16384, hop = 2048, bins = 8193, idx = 0;
+    int64_t pos = 0;
+    int phase[2] { 0, 1024 }, staggerLane = 0, staggerBits = 0;
     std::unique_ptr<juce::dsp::FFT> fft;
     std::vector<float> window, frame, omega;
     Channel ch[2];
     float amount = 0.0f, xf = 0.0f, xfStep = 0.0f;
     double ramp = 0.0, upStep = 0.0, downStep = 0.0;
     int framesHeard = 0;
-    bool fresh = true;
     Rng rng;
 };
 } // namespace fp

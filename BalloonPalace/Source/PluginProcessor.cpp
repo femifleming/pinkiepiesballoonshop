@@ -1002,11 +1002,12 @@ void FreakiePieProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
         auto& w = weather[(size_t) k];
         w.process (chans[2 * k], chans[2 * k + 1], n, rainOn, heliumOn, cloudOn);
         heatWave[(size_t) k]->setFadeTimes (p_heatIn->load(), p_heatOut->load());
-        heatWave[(size_t) k]->process (chans[2 * k], chans[2 * k + 1], n, heatOn);
+        heatWave[(size_t) k]->process (chans[2 * k], chans[2 * k + 1], n, heatOn, wxClock);
         snowFreeze[(size_t) k]->setFadeTimes (p_snowIn->load(), p_snowOut->load());
-        snowFreeze[(size_t) k]->process (chans[2 * k], chans[2 * k + 1], n, snowOn);
+        snowFreeze[(size_t) k]->process (chans[2 * k], chans[2 * k + 1], n, snowOn, wxClock);
         masterEq[(size_t) k].process (chans[2 * k], chans[2 * k + 1], n, eq);
     }
+    wxClock += n;
     for (int k = pairsNow; k < preparedPairs.load(); ++k)   // the pairs resting this block keep up with the switches, quietly
     {
         float* z0 = verbBus.getWritePointer (0);
@@ -1536,6 +1537,9 @@ void FreakiePieProcessor::preparePairs (int upTo)
     {
         weather[(size_t) k].prepare (preparedRate);
         masterEq[(size_t) k].prepare (preparedRate);
+        // every pair's heat and snow frames take their own turn in the hop (64 lanes), so they never pile up in one block
+        heatWave[(size_t) k]->setStagger (2 * k, 6);
+        snowFreeze[(size_t) k]->setStagger (2 * k + 1, 6);
         snowFreeze[(size_t) k]->prepare (preparedRate);
         heatWave[(size_t) k]->prepare (preparedRate);
     }
